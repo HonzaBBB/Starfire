@@ -21,11 +21,27 @@
         height: 100%;
         touch-action: none;
       }
+
+      #loading-overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at center, #0a1220 0%, #02030a 70%);
+        color: #d9ebff;
+        font-size: 32px;
+        font-weight: bold;
+        letter-spacing: 1px;
+        z-index: 10000;
+        user-select: none;
+      }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
   </head>
   <body>
     <div id="game-container"></div>
+    <div id="loading-overlay">Loading... 0%</div>
     <script>
       class StarfireScene extends Phaser.Scene {
         constructor() {
@@ -105,6 +121,8 @@
         }
 
         preload() {
+          this.bindLoadingOverlayToPreload();
+
           const root = "assets/Space Shooter Pack – 2D Pixel Art Ships, Enemies, VFX & Music";
           this.load.image("background", `${root}/Backgroud/Background (3).png`);
           this.load.image("playerShip", `${root}/Nave/PNG NAVE/Nave (1)1.png`);
@@ -126,6 +144,8 @@
         }
 
         create() {
+          this.hideLoadingOverlay();
+
           this.resetRuntimeState();
           this.events.once("shutdown", this.onSceneShutdown, this);
 
@@ -434,6 +454,28 @@
 
         tryStartMusic() {
           if (this.music && !this.music.isPlaying) this.music.play();
+        }
+
+        bindLoadingOverlayToPreload() {
+          const loadingOverlay = document.getElementById("loading-overlay");
+          if (!loadingOverlay) return;
+          loadingOverlay.style.display = "flex";
+          loadingOverlay.textContent = "Loading... 0%";
+
+          this.load.on("progress", (value) => {
+            const percent = Math.round(Phaser.Math.Clamp(value, 0, 1) * 100);
+            loadingOverlay.textContent = `Loading... ${percent}%`;
+          });
+
+          this.load.on("complete", () => {
+            loadingOverlay.textContent = "Loading... 100%";
+          });
+        }
+
+        hideLoadingOverlay() {
+          const loadingOverlay = document.getElementById("loading-overlay");
+          if (!loadingOverlay) return;
+          loadingOverlay.style.display = "none";
         }
 
         normalizePlayerAlias(name) {
