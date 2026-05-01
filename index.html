@@ -352,8 +352,17 @@
             .setDepth(15)
             .setVisible(false);
 
+          const restartFontSizePx = Phaser.Math.Clamp(Math.floor(this.scale.width * 0.04), 18, 24);
           this.restartText = this.add
-            .text(this.scale.width * 0.5, this.scale.height * 0.5 + 30, "Tap / Press SPACE to Restart", { fontSize: "24px", color: "#fff" })
+            .text(this.scale.width * 0.5, this.scale.height * 0.5 + 30, "Tap / Press SPACE to Restart", {
+              fontSize: `${restartFontSizePx}px`,
+              color: "#fff",
+              align: "center",
+              wordWrap: {
+                width: this.scale.width - 44,
+                useAdvancedWrap: true
+              }
+            })
             .setOrigin(0.5)
             .setDepth(15)
             .setVisible(false);
