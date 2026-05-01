@@ -457,7 +457,9 @@
         }
 
         async submitScoreToLeaderboard(playerNameOverride) {
-          if (this.scoreSubmitted || this.score <= 0) return;
+          if (this.scoreSubmitted || this.score <= 0) {
+            return { ok: false, error: "Invalid score submission state" };
+          }
           this.scoreSubmitted = true;
           try {
             const payload = {
@@ -469,15 +471,22 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(payload)
             });
+            let data = null;
+            try {
+              data = await res.json();
+            } catch (jsonErr) {
+              data = null;
+            }
             if (!res.ok) {
               this.scoreSubmitted = false;
-              return false;
+              const reason = data?.details || data?.error || `HTTP ${res.status}`;
+              return { ok: false, error: reason };
             }
             await this.fetchLeaderboard();
-            return true;
+            return { ok: true, error: "" };
           } catch (err) {
             this.scoreSubmitted = false;
-            return false;
+            return { ok: false, error: err?.message || "Network error" };
           }
         }
 
@@ -607,8 +616,12 @@
             if (isNewHighScore) {
               const alias = await this.askAliasForHighScore();
               this.restartText.setText("Saving high score...");
-              const saved = await this.submitScoreToLeaderboard(alias);
-              this.restartText.setText(saved ? "High score saved! Tap / Press SPACE to Restart" : "Save failed. Tap / Press SPACE to Restart");
+              const saveResult = await this.submitScoreToLeaderboard(alias);
+              if (saveResult.ok) {
+                this.restartText.setText("High score saved! Tap / Press SPACE to Restart");
+              } else {
+                this.restartText.setText(`Save failed: ${saveResult.error}. Tap / Press SPACE to Restart`);
+              }
             } else {
               this.restartText.setText("Tap / Press SPACE to Restart");
             }

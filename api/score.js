@@ -40,10 +40,17 @@ module.exports = async (req, res) => {
     });
 
     if (error) {
-      return res.status(500).json({ error: "Failed to save score" });
+      return res.status(500).json({
+        error: "Failed to save score",
+        details: error.message || "Unknown Supabase insert error",
+        code: error.code || null
+      });
     }
     return res.status(200).json({ ok: true });
   } catch (err) {
-    return res.status(500).json({ error: "Server configuration error" });
+    return res.status(500).json({
+      error: "Server configuration error",
+      details: err && err.message ? err.message : "Unknown server error"
+    });
   }
 };
