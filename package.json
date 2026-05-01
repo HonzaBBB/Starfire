@@ -1,0 +1,8 @@
+{
+  "name": "starfire",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@supabase/supabase-js": "latest"
+  }
+}

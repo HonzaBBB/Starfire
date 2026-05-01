@@ -1,0 +1,1042 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>STARFIRE</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #02030a;
+        font-family: Arial, sans-serif;
+      }
+
+      #game-container {
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
+  </head>
+  <body>
+    <div id="game-container"></div>
+    <script>
+      class StarfireScene extends Phaser.Scene {
+        constructor() {
+          super("StarfireScene");
+
+          this.player = null;
+          this.playerFlame = null;
+          this.background = null;
+          this.cursors = null;
+          this.bullets = null;
+          this.enemies = null;
+          this.music = null;
+
+          this.score = 0;
+          this.lives = 3;
+          this.maxLives = 3;
+          this.scoreText = null;
+          this.scoreValueText = null;
+          this.livesText = null;
+          this.blasterText = null;
+          this.blasterValueText = null;
+          this.leaderboardText = null;
+          this.gameOverText = null;
+          this.restartText = null;
+          this.playerAlias = "";
+          this.scoreSubmitted = false;
+
+          /** Blaster: odemčení za +300 bodů od posledního resetu, 20 nábojů. */
+          this.blasterUnlocked = false;
+          this.blasterUnlockScore = 300;
+          this.blasterAmmo = 0;
+          this.blasterAmmoInitial = 20;
+          /** Score checkpoint po vyčerpání blasteru. */
+          this.blasterUnlockCheckpointScore = 0;
+          this.autoShotIndex = 0;
+
+          this.isGameOver = false;
+          this.lastShotTime = 0;
+          this.enemyWaveIndex = 0;
+          this.playerInvulnerableUntil = 0;
+          this.playerInvulnerableMs = 1200;
+
+          this.baseGameSpeedMultiplier = 0.55;
+          this.maxGameSpeedMultiplier = 1.15;
+          this.baseEnemyAmountMultiplier = 0.3;
+          this.maxEnemyAmountMultiplier = 1.05;
+          this.baseShotCooldownMs = 900;
+          this.minShotCooldownMs = 300;
+          this.basePlayerSpeed = 420;
+
+          this.waveConfig = [
+            { count: 5, speed: 120, spacingMs: 260 },
+            { count: 7, speed: 145, spacingMs: 220 },
+            { count: 9, speed: 170, spacingMs: 190 },
+            { count: 12, speed: 210, spacingMs: 150 }
+          ];
+
+          this.activeBossSprite = null;
+          this.bossHealth = 0;
+          this.bossMaxHealth = 0;
+          this.bossPlayerOverlap = null;
+          this.bossBulletOverlap = null;
+
+          this.bossHealthBg = null;
+          this.bossHealthFill = null;
+          this.bossLabelText = null;
+          this.bossWaveText = null;
+
+          /** Pořadí bosse v běhu (1 = první souboj — jen HP pás). */
+          this.bossEncounterCount = 0;
+          /** Režim 2+: vrstvené zásahy (jen pokud je blaster odemčen). */
+          this.bossLayeredMode = false;
+          this.bossNormalHitsNeeded = 0;
+          this.bossBlasterHitsNeeded = 0;
+        }
+
+        preload() {
+          const root = "assets/Space Shooter Pack – 2D Pixel Art Ships, Enemies, VFX & Music";
+          this.load.image("background", `${root}/Backgroud/Background (3).png`);
+          this.load.image("playerShip", `${root}/Nave/PNG NAVE/Nave (1)1.png`);
+          this.load.image("playerFlame", `${root}/Nave/PNG EFFECT/flame (1)1.png`);
+          this.load.image("bullet", `${root}/Effect/PNG/shoter (2)1.png`);
+          this.load.image("blasterShot", `${root}/Effect/PNG/shoter (10)1.png`);
+          this.load.audio("bgMusic", `${root}/Musicas test/Pixel Hero_s Quest.mp3`);
+          this.load.image("bossSprite", `${root}/Inimigos/PNG/INIMIGO (8)1.png`);
+
+          for (let i = 1; i <= 8; i += 1) {
+            this.load.image(`enemyA_${i}`, `${root}/Inimigos/PNG/INIMIGO (4)${i}.png`);
+            this.load.image(`enemyB_${i}`, `${root}/Inimigos/PNG/INIMIGO (14)${i}.png`);
+            this.load.image(`enemyC_${i}`, `${root}/Inimigos/PNG/INIMIGO (16)${i}.png`);
+          }
+
+          for (let i = 1; i <= 10; i += 1) {
+            this.load.image(`explosion${i}`, `${root}/Effect/PNG/Explo (1)${i}.png`);
+          }
+        }
+
+        create() {
+          this.resetRuntimeState();
+          this.events.once("shutdown", this.onSceneShutdown, this);
+
+          this.createBackground();
+          this.createAnimations();
+          this.createPlayer();
+          this.createGroups();
+          this.createUi();
+          this.setupInput();
+          this.setupCollisions();
+          this.setupAudio();
+          this.startEnemyWaveLoop();
+          this.time.delayedCall(15000, () => this.spawnBoss());
+          this.fetchLeaderboard();
+        }
+
+        resetRuntimeState() {
+          this.isGameOver = false;
+          this.lastShotTime = 0;
+          this.enemyWaveIndex = 0;
+          this.playerInvulnerableUntil = 0;
+          this.blasterUnlocked = false;
+          this.blasterAmmo = 0;
+          this.blasterUnlockCheckpointScore = 0;
+          this.autoShotIndex = 0;
+          this.bossEncounterCount = 0;
+          this.scoreSubmitted = false;
+          this.cleanupBossSession();
+          this.physics.resume();
+        }
+
+        /** Odstraní bosse, overlapy a UI (bez plánování dalšího spawnu). */
+        cleanupBossSession() {
+          if (this.bossPlayerOverlap) {
+            this.bossPlayerOverlap.destroy();
+            this.bossPlayerOverlap = null;
+          }
+          if (this.bossBulletOverlap) {
+            this.bossBulletOverlap.destroy();
+            this.bossBulletOverlap = null;
+          }
+          if (this.activeBossSprite) {
+            this.tweens.killTweensOf(this.activeBossSprite);
+            if (this.activeBossSprite.active) this.activeBossSprite.destroy();
+            this.activeBossSprite = null;
+          }
+          this.bossHealth = 0;
+          this.bossMaxHealth = 0;
+          this.bossLayeredMode = false;
+          this.bossNormalHitsNeeded = 0;
+          this.bossBlasterHitsNeeded = 0;
+          if (this.bossHealthBg) this.bossHealthBg.setVisible(false);
+          if (this.bossHealthFill) this.bossHealthFill.setVisible(false);
+          if (this.bossLabelText) this.bossLabelText.setVisible(false);
+        }
+
+        update(time, delta) {
+          this.updateBackground(delta);
+          this.updatePlayerFlame();
+          this.updateBossHealthBar();
+          this.updatePlayerInvulnerabilityVisual();
+
+          if (this.isGameOver) {
+            return;
+          }
+
+          this.updatePlayerMovement(delta);
+          this.autoShoot(time);
+          this.cleanupOffscreenObjects();
+        }
+
+        createBackground() {
+          this.background = this.add
+            .tileSprite(this.scale.width * 0.5, this.scale.height * 0.5, this.scale.width, this.scale.height, "background")
+            .setDepth(-10);
+        }
+
+        updateBackground(delta) {
+          if (!this.background) return;
+          this.background.tilePositionY -= 0.06 * delta * this.getCurrentGameSpeedMultiplier();
+        }
+
+        createAnimations() {
+          this.anims.create({
+            key: "explode",
+            frames: Array.from({ length: 10 }, (_, i) => ({ key: `explosion${i + 1}` })),
+            frameRate: 24,
+            repeat: 0
+          });
+
+          this.anims.create({
+            key: "enemyFlyA",
+            frames: Array.from({ length: 8 }, (_, i) => ({ key: `enemyA_${i + 1}` })),
+            frameRate: 16,
+            repeat: -1
+          });
+          this.anims.create({
+            key: "enemyFlyB",
+            frames: Array.from({ length: 8 }, (_, i) => ({ key: `enemyB_${i + 1}` })),
+            frameRate: 16,
+            repeat: -1
+          });
+          this.anims.create({
+            key: "enemyFlyC",
+            frames: Array.from({ length: 8 }, (_, i) => ({ key: `enemyC_${i + 1}` })),
+            frameRate: 16,
+            repeat: -1
+          });
+        }
+
+        createPlayer() {
+          const { width, height } = this.scale;
+          this.player = this.physics.add.sprite(width * 0.5, height - 90, "playerShip").setScale(1.3).setCollideWorldBounds(true).setImmovable(true);
+          this.tightenShipHitbox(this.player, 0.5, 0.42);
+          this.playerFlame = this.add.image(this.player.x, this.player.y + 20, "playerFlame").setScale(1.1);
+          this.playerFlame.setDepth(this.player.depth - 1);
+          this.isDraggingPlayer = false;
+          this.playerDragOffsetX = 0;
+        }
+
+        /** Menší body podle rámečku textury — méně zásahů na prázdné alfa okolo pixel artu. */
+        tightenShipHitbox(sprite, widthFactor, heightFactor) {
+          if (!sprite || !sprite.body || !sprite.frame) return;
+          const fw = sprite.frame.width;
+          const fh = sprite.frame.height;
+          const w = Math.max(4, Math.floor(fw * widthFactor));
+          const h = Math.max(4, Math.floor(fh * heightFactor));
+          sprite.body.setSize(w, h, true);
+        }
+
+        createGroups() {
+          this.bullets = this.physics.add.group({ defaultKey: "bullet", maxSize: 80 });
+          this.enemies = this.physics.add.group({ defaultKey: "enemyA_1", maxSize: 120 });
+        }
+
+        createUi() {
+          this.score = 0;
+          this.lives = 3;
+
+          const hudLeftLabelX = 16;
+          const hudLeftValueX = 160;
+          const scoreY = 12;
+          const blasterY = 42;
+          const hudRowStyle = {
+            fontSize: "24px",
+            fontStyle: "bold"
+          };
+
+          this.scoreText = this.add.text(hudLeftLabelX, scoreY, "Score:", { ...hudRowStyle, color: "#fff" }).setDepth(10);
+          this.scoreValueText = this.add.text(hudLeftValueX, scoreY, "0", { ...hudRowStyle, color: "#fff" }).setDepth(10);
+
+          this.blasterText = this.add
+            .text(hudLeftLabelX, blasterY, "BLASTER:", {
+              fontSize: "24px",
+              fontStyle: "bold",
+              stroke: "#050810",
+              strokeThickness: 4
+            })
+            .setOrigin(0, 0)
+            .setDepth(10);
+          this.blasterValueText = this.add
+            .text(hudLeftValueX, blasterY, "", {
+              fontSize: "24px",
+              fontStyle: "bold",
+              stroke: "#050810",
+              strokeThickness: 4
+            })
+            .setOrigin(0, 0)
+            .setDepth(10);
+          this.livesText = this.add
+            .text(this.scale.width - 16, 12, "", {
+              fontSize: "28px",
+              fontStyle: "bold",
+              stroke: "#061018",
+              strokeThickness: 5
+            })
+            .setOrigin(1, 0)
+            .setDepth(10);
+          this.updateLivesHud();
+          this.updateBlasterHud();
+
+          // Boss HUD: pravý sloupec přímo pod LIVES.
+          const w = this.scale.width;
+          this.bossBarMaxWidth = Math.min(190, Math.floor(w * 0.36));
+          const bossRightX = w - 16;
+          this.bossBarLeft = bossRightX - this.bossBarMaxWidth;
+          const bossBarCenterX = this.bossBarLeft + this.bossBarMaxWidth * 0.5;
+          const bossLabelY = blasterY + 24;
+          const bossBarY = 98;
+          this.bossLabelLineY = bossLabelY;
+          this.bossBarLineY = bossBarY;
+
+          this.bossHealthBg = this.add.rectangle(bossBarCenterX, bossBarY, this.bossBarMaxWidth, 14, 0x2a1f28).setVisible(false).setDepth(9);
+          this.bossHealthFill = this.add.rectangle(this.bossBarLeft, bossBarY, this.bossBarMaxWidth, 10, 0xff5f7a).setOrigin(0, 0.5).setVisible(false).setDepth(9);
+          this.bossLabelText = this.add
+            .text(bossRightX, bossLabelY, "BOSS HP", { fontSize: "18px", color: "#ff9ab0", fontStyle: "bold" })
+            .setOrigin(1, 1)
+            .setVisible(false)
+            .setDepth(9);
+
+          this.bossWaveText = this.add
+            .text(this.scale.width * 0.5, this.scale.height * 0.35, "BOSS WAVE", {
+              fontSize: "52px",
+              color: "#ff5f7a",
+              fontStyle: "bold",
+              stroke: "#140912",
+              strokeThickness: 8
+            })
+            .setOrigin(0.5)
+            .setDepth(14)
+            .setVisible(false);
+
+          this.gameOverText = this.add
+            .text(this.scale.width * 0.5, this.scale.height * 0.5 - 24, "GAME OVER", {
+              fontSize: "56px",
+              color: "#ff5f7a",
+              fontStyle: "bold",
+              stroke: "#140912",
+              strokeThickness: 8
+            })
+            .setOrigin(0.5)
+            .setDepth(15)
+            .setVisible(false);
+
+          this.restartText = this.add
+            .text(this.scale.width * 0.5, this.scale.height * 0.5 + 30, "Tap / Press SPACE to Restart", { fontSize: "24px", color: "#fff" })
+            .setOrigin(0.5)
+            .setDepth(15)
+            .setVisible(false);
+
+          this.leaderboardText = this.add
+            .text(this.scale.width - 16, this.scale.height - 14, "Leaderboard loading...", {
+              fontSize: "16px",
+              color: "#d9ebff",
+              fontStyle: "bold",
+              stroke: "#071124",
+              strokeThickness: 3,
+              align: "right"
+            })
+            .setOrigin(1, 1)
+            .setDepth(11);
+        }
+
+        setupInput() {
+          this.cursors = this.input.keyboard.createCursorKeys();
+
+          this.input.on("pointerdown", (pointer) => {
+            if (this.isGameOver) {
+              this.restartGame();
+              return;
+            }
+            this.tryStartMusic();
+            this.isDraggingPlayer = true;
+            this.playerDragOffsetX = pointer.x - this.player.x;
+          });
+
+          this.input.on("pointermove", (pointer) => {
+            if (!this.isDraggingPlayer || this.isGameOver || !this.player.active) return;
+            this.player.x = Phaser.Math.Clamp(pointer.x - this.playerDragOffsetX, this.player.displayWidth * 0.5, this.scale.width - this.player.displayWidth * 0.5);
+          });
+
+          this.input.on("pointerup", () => {
+            this.isDraggingPlayer = false;
+          });
+
+          this.input.keyboard.on("keydown", () => this.tryStartMusic());
+          this.input.keyboard.on("keydown-SPACE", () => {
+            if (this.isGameOver) this.restartGame();
+          });
+        }
+
+        setupCollisions() {
+          this.physics.add.overlap(this.bullets, this.enemies, (bullet, enemy) => {
+            bullet.disableBody(true, true);
+            this.createExplosion(enemy.x, enemy.y, 0.9);
+            enemy.disableBody(true, true);
+            this.addScore(10);
+          });
+
+          this.physics.add.overlap(this.player, this.enemies, (_, enemy) => {
+            enemy.disableBody(true, true);
+            this.handlePlayerHit();
+          });
+        }
+
+        setupAudio() {
+          if (this.music) {
+            this.music.stop();
+            this.music.destroy();
+          }
+          this.music = this.sound.add("bgMusic", { loop: true, volume: 0.35 });
+        }
+
+        tryStartMusic() {
+          if (this.music && !this.music.isPlaying) this.music.play();
+        }
+
+        getPlayerAlias() {
+          if (this.playerAlias) return this.playerAlias;
+          const stored = window.localStorage.getItem("starfire_player_alias");
+          if (stored && stored.trim()) {
+            this.playerAlias = stored.trim().slice(0, 20);
+            return this.playerAlias;
+          }
+          const generated = "Pilot-" + Phaser.Math.Between(100, 999);
+          this.playerAlias = generated;
+          window.localStorage.setItem("starfire_player_alias", generated);
+          return generated;
+        }
+
+        async submitScoreToLeaderboard() {
+          if (this.scoreSubmitted || this.score <= 0) return;
+          this.scoreSubmitted = true;
+          try {
+            const payload = {
+              playerName: this.getPlayerAlias(),
+              score: this.score
+            };
+            const res = await fetch("/api/score", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload)
+            });
+            if (!res.ok) {
+              this.scoreSubmitted = false;
+              return;
+            }
+            await this.fetchLeaderboard();
+          } catch (err) {
+            this.scoreSubmitted = false;
+          }
+        }
+
+        renderLeaderboard(items) {
+          if (!this.leaderboardText) return;
+          if (!Array.isArray(items) || items.length === 0) {
+            this.leaderboardText.setText("TOP PILOTS\n(no scores yet)");
+            return;
+          }
+          const rows = items.slice(0, 5).map((row, idx) => {
+            const name = String(row.playerName || "Pilot").slice(0, 12);
+            const score = Number(row.score || 0);
+            return `${idx + 1}. ${name.padEnd(12, " ")} ${score}`;
+          });
+          this.leaderboardText.setText("TOP PILOTS\n" + rows.join("\n"));
+        }
+
+        async fetchLeaderboard() {
+          try {
+            const res = await fetch("/api/leaderboard?limit=5");
+            if (!res.ok) {
+              this.renderLeaderboard([]);
+              return;
+            }
+            const data = await res.json();
+            this.renderLeaderboard(data.items || []);
+          } catch (err) {
+            this.renderLeaderboard([]);
+          }
+        }
+
+        getDifficultyProgress() {
+          return Phaser.Math.Clamp((this.enemyWaveIndex - 1) / 17, 0, 1);
+        }
+
+        /** Endless ramp po dosažení původního capu (po ~18. vlně). */
+        getEndlessPressure() {
+          return Math.max(0, this.enemyWaveIndex - 18);
+        }
+
+        getCurrentGameSpeedMultiplier() {
+          const base = Phaser.Math.Linear(this.baseGameSpeedMultiplier, this.maxGameSpeedMultiplier, this.getDifficultyProgress());
+          const endlessBoost = Math.min(1.25, this.getEndlessPressure() * 0.035);
+          return base + endlessBoost;
+        }
+
+        getCurrentEnemyAmountMultiplier() {
+          const base = Phaser.Math.Linear(this.baseEnemyAmountMultiplier, this.maxEnemyAmountMultiplier, this.getDifficultyProgress());
+          const endlessBoost = Math.min(1.2, this.getEndlessPressure() * 0.045);
+          return base + endlessBoost;
+        }
+
+        getCurrentShotCooldownMs() {
+          const base = Phaser.Math.Linear(this.baseShotCooldownMs, this.minShotCooldownMs, this.getDifficultyProgress());
+          const endlessReduction = Math.min(170, this.getEndlessPressure() * 6);
+          return Math.max(170, base - endlessReduction);
+        }
+
+        updatePlayerMovement(delta) {
+          if (!this.player || !this.player.active) return;
+          const dt = delta / 1000;
+          let axis = 0;
+          if (this.cursors.left.isDown) axis -= 1;
+          if (this.cursors.right.isDown) axis += 1;
+          if (axis === 0) return;
+
+          const speed = this.basePlayerSpeed * this.getCurrentGameSpeedMultiplier();
+          this.player.x += axis * speed * dt;
+          this.player.x = Phaser.Math.Clamp(this.player.x, this.player.displayWidth * 0.5, this.scale.width - this.player.displayWidth * 0.5);
+        }
+
+        updatePlayerFlame() {
+          if (!this.player || !this.playerFlame || !this.player.active) return;
+          this.playerFlame.x = this.player.x;
+          this.playerFlame.y = this.player.y + this.player.displayHeight * 0.28;
+        }
+
+        autoShoot(time) {
+          if (!this.player || !this.player.active) return;
+          const cooldown = this.getCurrentShotCooldownMs();
+          if (time - this.lastShotTime < cooldown) return;
+          this.lastShotTime = time;
+
+          this.autoShotIndex += 1;
+          const mul = this.getCurrentGameSpeedMultiplier();
+          const slotBlaster = this.blasterUnlocked && this.autoShotIndex % 3 === 0;
+          const useBlaster = slotBlaster && this.blasterAmmo > 0;
+          const tex = useBlaster ? "blasterShot" : "bullet";
+
+          const bullet = this.bullets.get(this.player.x, this.player.y - 24, tex);
+          if (!bullet) return;
+          bullet.enableBody(true, this.player.x, this.player.y - 24, true, true);
+          bullet.setTexture(tex);
+          bullet.setData("weapon", useBlaster ? "blaster" : "normal");
+          if (useBlaster) {
+            this.blasterAmmo -= 1;
+            if (this.blasterAmmo <= 0) {
+              this.blasterAmmo = 0;
+              this.blasterUnlocked = false;
+              this.blasterUnlockCheckpointScore = this.score;
+            }
+            this.updateBlasterHud();
+            bullet.setScale(2.35);
+            bullet.setVelocity(0, -640 * mul);
+            bullet.setTint(0x7df9ff);
+            bullet.setBlendMode(Phaser.BlendModes.ADD);
+          } else {
+            bullet.setScale(1.6);
+            bullet.setVelocity(0, -580 * mul);
+            bullet.clearTint();
+            bullet.setBlendMode(Phaser.BlendModes.NORMAL);
+          }
+        }
+
+        processBlasterScore() {
+          const gainedSinceReset = this.score - this.blasterUnlockCheckpointScore;
+          if (!this.blasterUnlocked && gainedSinceReset >= this.blasterUnlockScore) {
+            this.blasterUnlocked = true;
+            this.blasterAmmo = this.blasterAmmoInitial;
+          }
+        }
+
+        updateBlasterHud() {
+          if (!this.blasterText || !this.blasterValueText) return;
+          const base = { fontSize: "24px", fontStyle: "bold" };
+          if (!this.blasterUnlocked) {
+            const gainedSinceReset = this.score - this.blasterUnlockCheckpointScore;
+            const rem = Math.max(0, this.blasterUnlockScore - gainedSinceReset);
+            this.blasterValueText.setText(rem > 0 ? `+${rem}` : "READY");
+            this.blasterValueText.setStyle({ ...base, color: "#8899aa", stroke: "#0a1018", strokeThickness: 4 });
+            return;
+          }
+          if (this.blasterAmmo > 0) {
+            this.blasterValueText.setText(`${this.blasterAmmo}`);
+            this.blasterValueText.setStyle({ ...base, color: "#6dffc8", stroke: "#052818", strokeThickness: 4 });
+            return;
+          }
+          const rem = Math.max(0, this.blasterUnlockScore - (this.score - this.blasterUnlockCheckpointScore));
+          this.blasterValueText.setText(`0 (+${rem})`);
+          this.blasterValueText.setStyle({ ...base, color: "#ffb84d", stroke: "#281808", strokeThickness: 4 });
+        }
+
+        startEnemyWaveLoop() {
+          this.time.addEvent({
+            delay: 3000,
+            callback: this.spawnEnemyWave,
+            callbackScope: this,
+            loop: true
+          });
+        }
+
+        spawnEnemyWave() {
+          if (this.isGameOver) return;
+
+          this.enemyWaveIndex += 1;
+
+          const wave = this.waveConfig[(this.enemyWaveIndex - 1) % this.waveConfig.length];
+          const amountMul = this.getCurrentEnemyAmountMultiplier();
+          const count = Math.max(1, Math.round(wave.count * amountMul));
+          const spacing = Math.round(wave.spacingMs / amountMul);
+
+          for (let i = 0; i < count; i += 1) {
+            this.time.delayedCall(i * spacing, () => {
+              if (!this.isGameOver) this.spawnEnemy(wave.speed);
+            });
+          }
+        }
+
+        spawnBoss() {
+          if (this.isGameOver) return;
+          if (this.activeBossSprite && this.activeBossSprite.active) return;
+
+          const width = this.scale.width;
+          const boss = this.physics.add.sprite(width * 0.5, -120, "bossSprite").setScale(1.8).setImmovable(true).setDepth(6);
+          this.tightenShipHitbox(boss, 0.55, 0.52);
+          if (boss.body) {
+            boss.body.setAllowGravity(false);
+          }
+          this.activeBossSprite = boss;
+          this.bossEncounterCount += 1;
+          const enc = this.bossEncounterCount;
+
+          if (enc === 1) {
+            this.bossLayeredMode = false;
+            this.bossMaxHealth = 72;
+            this.bossHealth = 72;
+            this.bossLabelText.setText("BOSS HP");
+          } else if (enc >= 2 && this.blasterUnlocked) {
+            this.bossLayeredMode = true;
+            this.bossNormalHitsNeeded = 4;
+            this.bossBlasterHitsNeeded = 3;
+            this.bossMaxHealth = 7;
+            this.bossHealth = 7;
+            this.bossLabelText.setText("BOSS HP");
+          } else {
+            this.bossLayeredMode = false;
+            this.bossMaxHealth = 68;
+            this.bossHealth = 68;
+            this.bossLabelText.setText("BOSS HP");
+          }
+
+          this.bossHealthBg.setVisible(true);
+          this.bossHealthFill.setVisible(true);
+          this.bossLabelText.setVisible(true);
+
+          this.bossWaveText.setVisible(true).setAlpha(1);
+          this.tweens.add({
+            targets: this.bossWaveText,
+            alpha: 0,
+            duration: 900,
+            delay: 700,
+            onComplete: () => {
+              this.bossWaveText.setVisible(false);
+            }
+          });
+
+          this.tweens.add({
+            targets: boss,
+            y: 120,
+            duration: 2000,
+            ease: "Quad.Out",
+            onComplete: () => this.startBossFight(boss)
+          });
+        }
+
+        startBossFight(boss) {
+          if (this.isGameOver || !boss || !boss.active) return;
+
+          if (boss.body) {
+            boss.body.reset(boss.x, boss.y);
+            boss.body.setVelocity(0, 0);
+            boss.body.setAllowGravity(false);
+          }
+
+          const width = this.scale.width;
+
+          // Boční pohyb: bez pevného `from` — tween startuje z aktuálního x (střed), žádný skok na x=80.
+          // yoyo: kyvuje mezi středem a pravým okrajem (9000 ms = o 80 % pomaleji než původních 1800 ms).
+          this.tweens.add({
+            targets: boss,
+            x: width - 80,
+            duration: 9000,
+            ease: "Sine.inOut",
+            yoyo: true,
+            repeat: -1
+          });
+
+          const fightMs = Math.min(28000, 15000 + Math.max(0, this.bossEncounterCount - 1) * 4000);
+          this.time.delayedCall(fightMs, () => this.exitBoss(boss));
+
+          if (this.bossPlayerOverlap) {
+            this.bossPlayerOverlap.destroy();
+            this.bossPlayerOverlap = null;
+          }
+          if (this.bossBulletOverlap) {
+            this.bossBulletOverlap.destroy();
+            this.bossBulletOverlap = null;
+          }
+
+          this.bossPlayerOverlap = this.physics.add.overlap(this.player, boss, () => this.handlePlayerHit());
+          this.bossBulletOverlap = this.physics.add.overlap(this.bullets, boss, (obj1, obj2) => {
+            // Phaser může předat (boss, bullet) — vždy mažeme jen střelu, ne bosse.
+            const bullet = obj1 === boss ? obj2 : obj1;
+            bullet.disableBody(true, true);
+            if (!boss.active || this.isGameOver) return;
+
+            const weapon = bullet.getData("weapon") || "normal";
+
+            if (this.bossLayeredMode) {
+              if (weapon === "blaster") {
+                if (this.bossBlasterHitsNeeded > 0) {
+                  this.bossBlasterHitsNeeded -= 1;
+                  this.bossHealth -= 1;
+                  this.addScore(5);
+                  this.showBossHitFeedback(boss.x, boss.y, "BLAST +5", "#7af0ff");
+                } else {
+                  this.addScore(1);
+                  this.showBossHitFeedback(boss.x, boss.y, "—", "#8899aa");
+                }
+              } else if (this.bossNormalHitsNeeded > 0) {
+                this.bossNormalHitsNeeded -= 1;
+                this.bossHealth -= 1;
+                this.addScore(2);
+                this.showBossHitFeedback(boss.x, boss.y, "HIT +2", "#ffe37a");
+              } else {
+                this.addScore(1);
+                this.showBossHitFeedback(boss.x, boss.y, "—", "#aa88cc");
+              }
+
+              if (this.bossHealth <= 0) {
+                this.createExplosion(boss.x, boss.y, 1.9);
+                this.addScore(700);
+                this.finishBossByDefeat(boss);
+              }
+              return;
+            }
+
+            const dmg = weapon === "blaster" ? 6 : 3;
+            this.bossHealth -= dmg;
+            if (weapon === "blaster") {
+              this.addScore(4);
+              this.showBossHitFeedback(boss.x, boss.y, "BLAST +4", "#7af0ff");
+            } else {
+              this.addScore(2);
+              this.showBossHitFeedback(boss.x, boss.y, "HIT +2", "#ffe37a");
+            }
+            if (this.bossHealth <= 0) {
+              this.createExplosion(boss.x, boss.y, 1.9);
+              this.addScore(700);
+              this.finishBossByDefeat(boss);
+            }
+          });
+        }
+
+        exitBoss(boss) {
+          if (this.isGameOver) return;
+          if (!boss || !boss.active) return;
+          if (boss !== this.activeBossSprite) return;
+
+          this.tweens.killTweensOf(boss);
+          if (this.bossPlayerOverlap) {
+            this.bossPlayerOverlap.destroy();
+            this.bossPlayerOverlap = null;
+          }
+          if (this.bossBulletOverlap) {
+            this.bossBulletOverlap.destroy();
+            this.bossBulletOverlap = null;
+          }
+
+          this.tweens.add({
+            targets: boss,
+            y: -150,
+            duration: 1500,
+            ease: "Quad.in",
+            onComplete: () => {
+              if (boss.active) boss.destroy();
+              this.activeBossSprite = null;
+              this.bossHealth = 0;
+              this.bossMaxHealth = 0;
+              this.bossHealthBg.setVisible(false);
+              this.bossHealthFill.setVisible(false);
+              this.bossLabelText.setVisible(false);
+              this.time.delayedCall(20000, () => this.spawnBoss());
+            }
+          });
+        }
+
+        /** Boss killed by damage: explosion, score, then same respawn delay as exitBoss. */
+        finishBossByDefeat(boss) {
+          if (!boss || !boss.active) return;
+          if (boss !== this.activeBossSprite) return;
+
+          this.tweens.killTweensOf(boss);
+          if (this.bossPlayerOverlap) {
+            this.bossPlayerOverlap.destroy();
+            this.bossPlayerOverlap = null;
+          }
+          if (this.bossBulletOverlap) {
+            this.bossBulletOverlap.destroy();
+            this.bossBulletOverlap = null;
+          }
+          if (boss.active) boss.destroy();
+          this.activeBossSprite = null;
+          this.bossHealth = 0;
+          this.bossMaxHealth = 0;
+          this.bossHealthBg.setVisible(false);
+          this.bossHealthFill.setVisible(false);
+          this.bossLabelText.setVisible(false);
+          this.time.delayedCall(20000, () => this.spawnBoss());
+        }
+
+        spawnEnemy(speed) {
+          const margin = 90;
+          const x = Phaser.Math.Between(margin, this.scale.width - margin);
+          const type = Phaser.Math.Between(0, 2);
+          const enemy = this.enemies.get(x, -30, "enemyA_1");
+          if (!enemy) return;
+
+          const animation = type === 0 ? "enemyFlyA" : type === 1 ? "enemyFlyB" : "enemyFlyC";
+          const key = type === 0 ? "enemyA_1" : type === 1 ? "enemyB_1" : "enemyC_1";
+
+          enemy.enableBody(true, x, -30, true, true);
+          enemy.setTexture(key).setScale(1.05).setVelocity(0, (speed + Phaser.Math.Between(-20, 30)) * this.getCurrentGameSpeedMultiplier());
+          enemy.play(animation, true);
+          this.tightenShipHitbox(enemy, 0.54, 0.5);
+        }
+
+        showBossHitFeedback(x, y, label = "HIT +2", color = "#ffe37a") {
+          if (this.activeBossSprite && this.activeBossSprite.active) {
+            this.activeBossSprite.setTint(0xff6d6d);
+            this.time.delayedCall(70, () => {
+              if (this.activeBossSprite && this.activeBossSprite.active) this.activeBossSprite.clearTint();
+            });
+          }
+
+          const hit = this.add
+            .text(x, y - 20, label, {
+              fontSize: "18px",
+              color,
+              fontStyle: "bold",
+              stroke: "#1d1428",
+              strokeThickness: 4
+            })
+            .setOrigin(0.5)
+            .setDepth(20);
+
+          this.tweens.add({
+            targets: hit,
+            y: y - 55,
+            alpha: 0,
+            duration: 320,
+            onComplete: () => hit.destroy()
+          });
+        }
+
+        updateBossHealthBar() {
+          if (!this.activeBossSprite || !this.activeBossSprite.active || this.bossMaxHealth <= 0) return;
+          const maxWidth = this.bossBarMaxWidth || this.scale.width * 0.5;
+          const ratio = Phaser.Math.Clamp(this.bossHealth / this.bossMaxHealth, 0, 1);
+          this.bossHealthFill.width = maxWidth * ratio;
+        }
+
+        updateLivesHud() {
+          if (!this.livesText) return;
+          const slots = [];
+          for (let i = 0; i < this.maxLives; i += 1) {
+            slots.push(i < this.lives ? "♥" : "·");
+          }
+          const line = `LIVES  ${slots.join(" ")}`;
+          let color = "#7fe8ff";
+          if (this.lives === 2) color = "#ffb84d";
+          if (this.lives === 1) color = "#ff5c5c";
+          if (this.lives <= 0) color = "#8899aa";
+          this.livesText.setText(line);
+          this.livesText.setStyle({ color, fontSize: "28px", fontStyle: "bold", stroke: "#061018", strokeThickness: 5 });
+        }
+
+        playLifeLostFeedback() {
+          this.cameras.main.shake(280, 0.012);
+
+          const w = this.scale.width;
+          const lostLabel = this.add
+            .text(w * 0.5, 58, "−1  LIFE", {
+              fontSize: "38px",
+              color: "#ff4757",
+              fontStyle: "bold",
+              stroke: "#1a0508",
+              strokeThickness: 7
+            })
+            .setOrigin(0.5)
+            .setDepth(16);
+
+          this.tweens.add({
+            targets: lostLabel,
+            y: 20,
+            alpha: 0,
+            duration: 750,
+            ease: "Quad.easeOut",
+            onComplete: () => lostLabel.destroy()
+          });
+
+          this.tweens.killTweensOf(this.livesText);
+          this.livesText.setScale(1);
+          this.tweens.add({
+            targets: this.livesText,
+            scaleX: 1.42,
+            scaleY: 1.42,
+            duration: 160,
+            yoyo: true,
+            ease: "Sine.easeInOut"
+          });
+        }
+
+        handlePlayerHit() {
+          if (!this.player || !this.player.active || this.isGameOver) return;
+          if (this.time.now < this.playerInvulnerableUntil) return;
+
+          this.lives -= 1;
+          this.updateLivesHud();
+          this.playLifeLostFeedback();
+          this.createExplosion(this.player.x, this.player.y, 1);
+
+          if (this.lives <= 0) {
+            this.triggerGameOver();
+            return;
+          }
+          // Krátká nesmrtelnost po zásahu, aby hráč nedostal instant chain-hit.
+          this.playerInvulnerableUntil = this.time.now + this.playerInvulnerableMs;
+        }
+
+        updatePlayerInvulnerabilityVisual() {
+          if (!this.player || !this.player.active) return;
+          if (this.time.now < this.playerInvulnerableUntil) {
+            this.player.alpha = Math.floor(this.time.now / 80) % 2 === 0 ? 0.45 : 1;
+          } else {
+            this.player.alpha = 1;
+          }
+        }
+
+        cleanupOffscreenObjects() {
+          const h = this.scale.height;
+          this.bullets.children.iterate((bullet) => {
+            if (bullet && bullet.active && (bullet.y < -40 || bullet.y > h + 40)) bullet.disableBody(true, true);
+          });
+          this.enemies.children.iterate((enemy) => {
+            if (enemy && enemy.active && enemy.y > h + 40) {
+              enemy.disableBody(true, true);
+              this.addScore(-5);
+            }
+          });
+
+        }
+
+        clearCombatObjects() {
+          this.bullets.children.iterate((bullet) => {
+            if (bullet && bullet.active) bullet.disableBody(true, true);
+          });
+          this.enemies.children.iterate((enemy) => {
+            if (enemy && enemy.active) enemy.disableBody(true, true);
+          });
+          this.cleanupBossSession();
+          this.bossWaveText.setVisible(false);
+        }
+
+        createExplosion(x, y, scale = 1) {
+          const exp = this.add.sprite(x, y, "explosion1").setScale(scale);
+          exp.play("explode");
+          exp.once("animationcomplete", () => exp.destroy());
+        }
+
+        addScore(points) {
+          this.score = Math.max(0, this.score + points);
+          this.scoreValueText.setText(String(this.score));
+          this.processBlasterScore();
+          this.updateBlasterHud();
+        }
+
+        triggerGameOver() {
+          if (this.isGameOver) return;
+          this.isGameOver = true;
+          this.time.removeAllEvents();
+          this.createExplosion(this.player.x, this.player.y, 1.4);
+          this.clearCombatObjects();
+          this.player.disableBody(true, true);
+          this.playerFlame.setVisible(false);
+          this.physics.pause();
+          if (this.music && this.music.isPlaying) this.music.stop();
+          this.gameOverText.setVisible(true);
+          this.restartText.setVisible(true);
+          this.submitScoreToLeaderboard();
+        }
+
+        restartGame() {
+          this.scene.restart();
+        }
+
+        onSceneShutdown() {
+          this.time.removeAllEvents();
+          this.cleanupBossSession();
+          if (this.music) {
+            this.music.stop();
+            this.music.destroy();
+            this.music = null;
+          }
+        }
+      }
+
+      const config = {
+        type: Phaser.AUTO,
+        parent: "game-container",
+        width: 480,
+        height: 800,
+        backgroundColor: "#030413",
+        pixelArt: true,
+        physics: { default: "arcade", arcade: { debug: false } },
+        scale: {
+          mode: Phaser.Scale.FIT,
+          autoCenter: Phaser.Scale.CENTER_BOTH
+        },
+        scene: [StarfireScene]
+      };
+
+      new Phaser.Game(config);
+    </script>
+  </body>
+</html>
