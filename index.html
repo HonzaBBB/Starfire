@@ -52,6 +52,8 @@
           this.restartText = null;
           this.playerAlias = "";
           this.scoreSubmitted = false;
+          this.allowRestartAfterGameOver = false;
+          this.nameEntryOverlay = null;
 
           /** Blaster: odemčení za +300 bodů od posledního resetu, 20 nábojů. */
           this.blasterUnlocked = false;
@@ -151,6 +153,8 @@
           this.autoShotIndex = 0;
           this.bossEncounterCount = 0;
           this.scoreSubmitted = false;
+          this.allowRestartAfterGameOver = false;
+          this.removeNameEntryOverlay();
           this.cleanupBossSession();
           this.physics.resume();
         }
@@ -372,7 +376,7 @@
 
           this.input.on("pointerdown", (pointer) => {
             if (this.isGameOver) {
-              this.restartGame();
+              if (this.allowRestartAfterGameOver) this.restartGame();
               return;
             }
             this.tryStartMusic();
@@ -391,7 +395,7 @@
 
           this.input.keyboard.on("keydown", () => this.tryStartMusic());
           this.input.keyboard.on("keydown-SPACE", () => {
-            if (this.isGameOver) this.restartGame();
+            if (this.isGameOver && this.allowRestartAfterGameOver) this.restartGame();
           });
         }
 
@@ -421,11 +425,20 @@
           if (this.music && !this.music.isPlaying) this.music.play();
         }
 
+        normalizePlayerAlias(name) {
+          const safe = String(name || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 20);
+          return safe;
+        }
+
         getPlayerAlias() {
           if (this.playerAlias) return this.playerAlias;
           const stored = window.localStorage.getItem("starfire_player_alias");
-          if (stored && stored.trim()) {
-            this.playerAlias = stored.trim().slice(0, 20);
+          const normalizedStored = this.normalizePlayerAlias(stored);
+          if (normalizedStored) {
+            this.playerAlias = normalizedStored;
             return this.playerAlias;
           }
           const generated = "Pilot-" + Phaser.Math.Between(100, 999);
@@ -434,12 +447,12 @@
           return generated;
         }
 
-        async submitScoreToLeaderboard() {
+        async submitScoreToLeaderboard(playerNameOverride) {
           if (this.scoreSubmitted || this.score <= 0) return;
           this.scoreSubmitted = true;
           try {
             const payload = {
-              playerName: this.getPlayerAlias(),
+              playerName: playerNameOverride || this.getPlayerAlias(),
               score: this.score
             };
             const res = await fetch("/api/score", {
@@ -449,11 +462,150 @@
             });
             if (!res.ok) {
               this.scoreSubmitted = false;
-              return;
+              return false;
             }
             await this.fetchLeaderboard();
+            return true;
           } catch (err) {
             this.scoreSubmitted = false;
+            return false;
+          }
+        }
+
+        async fetchTopLeaderboardScore() {
+          try {
+            const res = await fetch("/api/leaderboard?limit=1");
+            if (!res.ok) return 0;
+            const data = await res.json();
+            const first = Array.isArray(data.items) ? data.items[0] : null;
+            const score = Number(first?.score || 0);
+            return Number.isFinite(score) ? score : 0;
+          } catch (err) {
+            return 0;
+          }
+        }
+
+        removeNameEntryOverlay() {
+          if (!this.nameEntryOverlay) return;
+          this.nameEntryOverlay.remove();
+          this.nameEntryOverlay = null;
+        }
+
+        askAliasForHighScore() {
+          return new Promise((resolve) => {
+            this.removeNameEntryOverlay();
+
+            const fallbackAlias = this.getPlayerAlias();
+            const overlay = document.createElement("div");
+            overlay.style.position = "fixed";
+            overlay.style.inset = "0";
+            overlay.style.background = "rgba(4, 8, 18, 0.72)";
+            overlay.style.display = "flex";
+            overlay.style.alignItems = "center";
+            overlay.style.justifyContent = "center";
+            overlay.style.zIndex = "9999";
+
+            const card = document.createElement("div");
+            card.style.width = "min(360px, 90vw)";
+            card.style.padding = "16px";
+            card.style.borderRadius = "12px";
+            card.style.background = "#10182a";
+            card.style.border = "1px solid #2d456f";
+            card.style.boxShadow = "0 20px 48px rgba(0,0,0,0.45)";
+            card.style.color = "#e8f0ff";
+            card.style.fontFamily = "Arial, sans-serif";
+
+            const title = document.createElement("div");
+            title.textContent = "NEW HIGH SCORE";
+            title.style.fontWeight = "700";
+            title.style.fontSize = "22px";
+            title.style.marginBottom = "10px";
+
+            const label = document.createElement("label");
+            label.textContent = "Enter your pilot name:";
+            label.style.display = "block";
+            label.style.fontSize = "14px";
+            label.style.marginBottom = "8px";
+
+            const input = document.createElement("input");
+            input.type = "text";
+            input.value = fallbackAlias;
+            input.maxLength = 20;
+            input.placeholder = "Pilot";
+            input.style.width = "100%";
+            input.style.boxSizing = "border-box";
+            input.style.padding = "10px 12px";
+            input.style.borderRadius = "8px";
+            input.style.border = "1px solid #3f5f90";
+            input.style.background = "#0c1423";
+            input.style.color = "#ffffff";
+            input.style.outline = "none";
+            input.style.marginBottom = "12px";
+
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = "Save Score";
+            button.style.width = "100%";
+            button.style.padding = "10px 12px";
+            button.style.border = "none";
+            button.style.borderRadius = "8px";
+            button.style.background = "#3b82f6";
+            button.style.color = "#fff";
+            button.style.fontWeight = "700";
+            button.style.cursor = "pointer";
+
+            const submitAlias = () => {
+              const normalized = this.normalizePlayerAlias(input.value);
+              const alias = normalized || fallbackAlias;
+              this.playerAlias = alias;
+              window.localStorage.setItem("starfire_player_alias", alias);
+              this.removeNameEntryOverlay();
+              resolve(alias);
+            };
+
+            button.addEventListener("click", submitAlias);
+            input.addEventListener("keydown", (event) => {
+              if (event.key === "Enter") submitAlias();
+            });
+
+            card.appendChild(title);
+            card.appendChild(label);
+            card.appendChild(input);
+            card.appendChild(button);
+            overlay.appendChild(card);
+            document.body.appendChild(overlay);
+            this.nameEntryOverlay = overlay;
+
+            window.setTimeout(() => {
+              input.focus();
+              input.select();
+            }, 20);
+          });
+        }
+
+        async handleGameOverLeaderboardFlow() {
+          if (!this.restartText) return;
+
+          this.restartText.setText("Checking leaderboard...");
+          this.restartText.setVisible(true);
+
+          try {
+            const topScore = await this.fetchTopLeaderboardScore();
+            // Jen striktně vyšší skóre je nový rekord.
+            // Pri rovnosti by se zapis mohl kvuli poradi ani neukazat v TOP 5.
+            const isNewHighScore = this.score > 0 && this.score > topScore;
+
+            if (isNewHighScore) {
+              const alias = await this.askAliasForHighScore();
+              this.restartText.setText("Saving high score...");
+              const saved = await this.submitScoreToLeaderboard(alias);
+              this.restartText.setText(saved ? "High score saved! Tap / Press SPACE to Restart" : "Save failed. Tap / Press SPACE to Restart");
+            } else {
+              this.restartText.setText("Tap / Press SPACE to Restart");
+            }
+          } finally {
+            this.allowRestartAfterGameOver = true;
+            this.restartText.setVisible(true);
           }
         }
 
@@ -994,6 +1146,7 @@
         triggerGameOver() {
           if (this.isGameOver) return;
           this.isGameOver = true;
+          this.allowRestartAfterGameOver = false;
           this.time.removeAllEvents();
           this.createExplosion(this.player.x, this.player.y, 1.4);
           this.clearCombatObjects();
@@ -1002,8 +1155,8 @@
           this.physics.pause();
           if (this.music && this.music.isPlaying) this.music.stop();
           this.gameOverText.setVisible(true);
-          this.restartText.setVisible(true);
-          this.submitScoreToLeaderboard();
+          this.restartText.setVisible(false);
+          this.handleGameOverLeaderboardFlow();
         }
 
         restartGame() {
@@ -1012,6 +1165,7 @@
 
         onSceneShutdown() {
           this.time.removeAllEvents();
+          this.removeNameEntryOverlay();
           this.cleanupBossSession();
           if (this.music) {
             this.music.stop();
